@@ -87,8 +87,8 @@ router.put("/:id", isLoggedIn, isOwner, async (req, res) => {
     );
     res.json({ success: true, data: updatedListing });
   } catch (err) {
-    if (err.name === "ValidationError") {
-      return res.status(400).json({ success: false, message: err.message });
+    if (err.name === "ValidationError" || err.name === "CastError") {
+      return res.status(400).json({ success: false, message: "Invalid input. Please check your data and try again." });
     }
     console.error("❌ Error updating listing:", err.message);
     res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
