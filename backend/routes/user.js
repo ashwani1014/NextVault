@@ -13,8 +13,12 @@ const validatePassword = (password) => {
   return password && password.length >= 6;
 };
 
-const validateUsername = (username) => {
+const validateUsernameForSignup = (username) => {
   return username && username.trim().length >= 3;
+};
+
+const validateUsernameForLogin = (username) => {
+  return username && username.trim().length > 0;
 };
 
 // POST /api/auth/signup
@@ -30,7 +34,7 @@ router.post("/signup", async (req, res) => {
     const trimmedUsername = username.trim();
     const trimmedEmail = email.trim().toLowerCase();
 
-    if (!validateUsername(trimmedUsername)) {
+    if (!validateUsernameForSignup(trimmedUsername)) {
       return res.status(400).json({ success: false, message: "Username must be at least 3 characters." });
     }
 
@@ -47,7 +51,12 @@ router.post("/signup", async (req, res) => {
 
     req.login(registeredUser, (err) => {
       if (err) {
-        return res.status(500).json({ success: false, message: "Registration failed. Please try again." });
+        // Account created but session login failed
+        console.error("Session login failed after account creation:", err.message);
+        return res.status(500).json({
+          success: false,
+          message: "Account created but failed to establish session. Please try logging in."
+        });
       }
       res.status(201).json({
         success: true,
@@ -63,17 +72,29 @@ router.post("/signup", async (req, res) => {
     if (err.name === 'UserExistsError') {
       return res.status(400).json({ success: false, message: "Username or email already exists." });
     }
-    res.status(400).json({ success: false, message: "Registration failed. Please try again." });
+    // Log unexpected errors safely without exposing sensitive details
+    console.error("Unexpected signup error:", err.message);
+    res.status(500).json({ success: false, message: "Registration failed. Please try again." });
   }
 });
 
 // POST /api/auth/login
 router.post("/login", (req, res, next) => {
+  // Handle missing or invalid request body
+  if (!req.body || typeof req.body !== 'object') {
+    return res.status(400).json({ success: false, message: "Invalid request." });
+  }
+
   const { username, password } = req.body;
 
   // Backend validation
   if (!username || !password) {
     return res.status(400).json({ success: false, message: "Username and password are required." });
+  }
+
+  // Validate username is a string before calling trim
+  if (typeof username !== 'string') {
+    return res.status(400).json({ success: false, message: "Username must be a string." });
   }
 
   if (!username.trim()) {
@@ -84,11 +105,13 @@ router.post("/login", (req, res, next) => {
     return res.status(400).json({ success: false, message: "Password is required." });
   }
 
-  // Use trimmed username for authentication
+  // Use trimmed username for authentication (don't enforce minimum length for login)
   req.body.username = username.trim();
 
   passport.authenticate("local", (err, user, info) => {
     if (err) {
+      // Log unexpected Passport authentication errors safely
+      console.error("Passport authentication error:", err.message);
       return res.status(500).json({ success: false, message: "Login failed. Please try again." });
     }
     if (!user) {
@@ -96,6 +119,7 @@ router.post("/login", (req, res, next) => {
     }
     req.logIn(user, (err) => {
       if (err) {
+        console.error("Session login error:", err.message);
         return res.status(500).json({ success: false, message: "Login failed. Please try again." });
       }
       res.json({

@@ -15,8 +15,6 @@ function Login({ setUser }) {
 
     if (!trimmedUsername) {
       errors.username = "Username is required.";
-    } else if (trimmedUsername.length < 3) {
-      errors.username = "Username must be at least 3 characters.";
     }
 
     if (!form.password) {

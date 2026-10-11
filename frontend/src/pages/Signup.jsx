@@ -83,7 +83,7 @@ function Signup({ setUser }) {
 
           {error && <div className="flash-message flash-error">{error}</div>}
 
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="form-group">
               <label className="form-label">Username</label>
               <input
