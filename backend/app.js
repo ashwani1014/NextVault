@@ -54,7 +54,6 @@ app.get("/api", (req, res) => {
 
 app.use("/api/listings", listingRoutes);
 app.use("/api/listings/:id/reviews", reviewRoutes);
-app.use("/api/reviews", reviewRoutes);
 app.use("/api/auth", userRoutes);
 
 // ─── Start Server ───

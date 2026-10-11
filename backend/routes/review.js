@@ -7,6 +7,7 @@ const { isLoggedIn, isReviewAuthor } = require("../middleware/auth.js");
 
 // POST create review for a listing (protected: authenticated users only)
 router.post("/", isLoggedIn, async (req, res) => {
+  let createdReview = null;
   try {
     const { id } = req.params;
     if (!id || !mongoose.Types.ObjectId.isValid(id)) {
@@ -20,19 +21,36 @@ router.post("/", isLoggedIn, async (req, res) => {
 
     const { comment, rating } = req.body;
     // Always assign author from authenticated session user (never trust client-supplied author)
-    const newReview = new Review({
+    createdReview = new Review({
       comment,
       rating,
       author: req.user._id,
     });
 
-    await newReview.save();
-    listing.reviews.push(newReview._id);
-    await listing.save();
+    await createdReview.save();
 
-    res.status(201).json({ success: true, data: newReview });
+    try {
+      listing.reviews.push(createdReview._id);
+      await listing.save();
+    } catch (listingErr) {
+      // Rollback: delete the created review if saving the listing fails to prevent orphan reviews
+      try {
+        await Review.findByIdAndDelete(createdReview._id);
+      } catch (cleanupErr) {
+        console.error("Failed to clean up orphan review:", cleanupErr);
+      }
+      return res.status(500).json({
+        success: false,
+        message: "Failed to link review to listing: " + listingErr.message,
+      });
+    }
+
+    res.status(201).json({ success: true, data: createdReview });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -48,7 +66,7 @@ router.get("/", async (req, res) => {
       path: "reviews",
       populate: {
         path: "author",
-        select: "username email",
+        select: "username",
       },
     });
     if (!listing) {
@@ -63,7 +81,7 @@ router.get("/", async (req, res) => {
 // PUT update review (protected: review author only)
 router.put("/:reviewId", isLoggedIn, isReviewAuthor, async (req, res) => {
   try {
-    const reviewId = req.params.reviewId || req.params.id;
+    const { reviewId } = req.params;
     const { comment, rating } = req.body;
     const updateData = {};
     if (comment !== undefined) updateData.comment = comment;
@@ -77,22 +95,20 @@ router.put("/:reviewId", isLoggedIn, isReviewAuthor, async (req, res) => {
     );
     res.json({ success: true, data: updatedReview });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
 // DELETE a review (protected: review author only)
 router.delete("/:reviewId", isLoggedIn, isReviewAuthor, async (req, res) => {
   try {
-    const reviewId = req.params.reviewId || req.params.id;
-    const listingId = req.params.id !== reviewId ? req.params.id : null;
-
-    if (listingId) {
-      await Listing.findByIdAndUpdate(listingId, { $pull: { reviews: reviewId } });
-    } else {
-      await Listing.updateMany({ reviews: reviewId }, { $pull: { reviews: reviewId } });
+    const { id, reviewId } = req.params;
+    if (id) {
+      await Listing.findByIdAndUpdate(id, { $pull: { reviews: reviewId } });
     }
-
     await Review.findByIdAndDelete(reviewId);
     res.json({ success: true, message: "Review deleted" });
   } catch (err) {

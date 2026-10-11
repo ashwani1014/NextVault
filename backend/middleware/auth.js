@@ -39,7 +39,7 @@ const isOwner = async (req, res, next) => {
   }
 };
 
-// Require authenticated user to be the author of the review
+// Require authenticated user to be the author of the review and verify review belongs to the listing
 const isReviewAuthor = async (req, res, next) => {
   try {
     if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
@@ -51,9 +51,40 @@ const isReviewAuthor = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Invalid review ID" });
     }
 
-    // If nested under /api/listings/:id/reviews/:reviewId, also validate listing ID if present
-    if (req.params.id && req.params.reviewId && !mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid listing ID" });
+    // When req.params.id identifies a listing in nested route (/api/listings/:id/reviews/:reviewId)
+    if (req.params.id && req.params.reviewId) {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ success: false, message: "Invalid listing ID" });
+      }
+
+      const listing = await Listing.findById(req.params.id);
+      if (!listing) {
+        return res.status(404).json({ success: false, message: "Listing not found" });
+      }
+
+      const review = await Review.findById(reviewId);
+      if (!review) {
+        return res.status(404).json({ success: false, message: "Review not found" });
+      }
+
+      // Ensure the review actually belongs to the specified listing
+      const belongsToListing = listing.reviews && listing.reviews.some((rId) => {
+        const idStr = rId && (rId._id ? rId._id.toString() : rId.toString());
+        return idStr === review._id.toString();
+      });
+
+      if (!belongsToListing) {
+        return res.status(404).json({ success: false, message: "Review not found in this listing" });
+      }
+
+      const authorId = review.author && (review.author._id || review.author);
+      if (!authorId || (authorId.equals ? !authorId.equals(req.user._id) : authorId.toString() !== req.user._id.toString())) {
+        return res.status(403).json({ success: false, message: "You do not have permission to perform this action" });
+      }
+
+      req.listing = listing;
+      req.review = review;
+      return next();
     }
 
     const review = await Review.findById(reviewId);

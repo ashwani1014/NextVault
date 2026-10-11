@@ -1,409 +1,699 @@
 const assert = require("assert");
+const http = require("http");
+const express = require("express");
 const mongoose = require("mongoose");
 const Listing = require("../models/listing.js");
 const Review = require("../models/review.js");
-const { isLoggedIn, isOwner, isReviewAuthor } = require("../middleware/auth.js");
+const listingRoutes = require("../routes/listing.js");
+const reviewRoutes = require("../routes/review.js");
 
-// Generate realistic ObjectIds for test fixtures
+// Test Identity Fixtures
 const ownerId = new mongoose.Types.ObjectId();
 const authorId = new mongoose.Types.ObjectId();
 const strangerId = new mongoose.Types.ObjectId();
-const listingId = new mongoose.Types.ObjectId();
-const reviewId = new mongoose.Types.ObjectId();
+
+const listing1Id = new mongoose.Types.ObjectId();
+const listing2Id = new mongoose.Types.ObjectId();
+const review1Id = new mongoose.Types.ObjectId();
+const review2Id = new mongoose.Types.ObjectId();
 const nonExistentId = new mongoose.Types.ObjectId();
 
-let passedTests = 0;
-let totalTests = 0;
+// Save original Mongoose methods
+const origListingFind = Listing.find;
+const origListingFindById = Listing.findById;
+const origListingFindByIdAndUpdate = Listing.findByIdAndUpdate;
+const origListingFindByIdAndDelete = Listing.findByIdAndDelete;
+const origListingSave = Listing.prototype.save;
 
-function runTest(name, fn) {
-  totalTests++;
-  try {
-    fn();
-    console.log(`  ✅ PASS: ${name}`);
-    passedTests++;
-  } catch (err) {
-    console.error(`  ❌ FAIL: ${name}\n     ${err.message}`);
-  }
+const origReviewFind = Review.find;
+const origReviewFindById = Review.findById;
+const origReviewFindByIdAndUpdate = Review.findByIdAndUpdate;
+const origReviewFindByIdAndDelete = Review.findByIdAndDelete;
+const origReviewDeleteMany = Review.deleteMany;
+const origReviewSave = Review.prototype.save;
+
+// In-Memory Test State
+let dbState = {};
+
+function resetDatabaseState() {
+  dbState = {
+    listings: new Map([
+      [
+        listing1Id.toString(),
+        {
+          _id: listing1Id,
+          title: "Sunset Villa",
+          description: "Cozy beach house",
+          price: 2500,
+          location: "Goa",
+          country: "India",
+          owner: { _id: ownerId, username: "listingOwner" },
+          reviews: [review1Id],
+        },
+      ],
+      [
+        listing2Id.toString(),
+        {
+          _id: listing2Id,
+          title: "Mountain Cabin",
+          description: "Quiet mountain retreat",
+          price: 1800,
+          location: "Manali",
+          country: "India",
+          owner: { _id: ownerId, username: "listingOwner" },
+          reviews: [review2Id],
+        },
+      ],
+    ]),
+    reviews: new Map([
+      [
+        review1Id.toString(),
+        {
+          _id: review1Id,
+          comment: "Loved the sunset!",
+          rating: 5,
+          author: { _id: authorId, username: "reviewAuthor" },
+        },
+      ],
+      [
+        review2Id.toString(),
+        {
+          _id: review2Id,
+          comment: "Chilly and scenic!",
+          rating: 4,
+          author: { _id: authorId, username: "reviewAuthor" },
+        },
+      ],
+    ]),
+  };
 }
 
-async function runAsyncTest(name, fn) {
-  totalTests++;
+// Setup Express Test Application
+const app = express();
+app.use(express.json());
+
+// Controlled Test Authentication Middleware
+app.use((req, res, next) => {
+  const role = req.headers["x-test-role"];
+  if (role === "owner") {
+    req.user = { _id: ownerId, username: "listingOwner" };
+    req.isAuthenticated = () => true;
+  } else if (role === "author") {
+    req.user = { _id: authorId, username: "reviewAuthor" };
+    req.isAuthenticated = () => true;
+  } else if (role === "stranger") {
+    req.user = { _id: strangerId, username: "strangerUser" };
+    req.isAuthenticated = () => true;
+  } else {
+    req.user = null;
+    req.isAuthenticated = () => false;
+  }
+  next();
+});
+
+// Mount the real application routers
+app.use("/api/listings", listingRoutes);
+app.use("/api/listings/:id/reviews", reviewRoutes);
+
+let server;
+let baseUrl;
+let passedCount = 0;
+let totalCount = 0;
+
+async function test(name, fn) {
+  totalCount++;
+  resetDatabaseState();
   try {
     await fn();
     console.log(`  ✅ PASS: ${name}`);
-    passedTests++;
+    passedCount++;
   } catch (err) {
     console.error(`  ❌ FAIL: ${name}\n     ${err.message}`);
   }
 }
 
-function mockResponse() {
-  const res = {
-    statusCode: 200,
-    body: null,
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    json(data) {
-      this.body = data;
-      return this;
-    },
-    locals: {},
+// Helper to make real HTTP requests to the test server
+async function request(path, options = {}) {
+  const url = `${baseUrl}${path}`;
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const fetchOptions = {
+    method: options.method || "GET",
+    headers,
   };
-  return res;
+  if (options.body) {
+    fetchOptions.body = JSON.stringify(options.body);
+  }
+  const res = await fetch(url, fetchOptions);
+  let data = null;
+  const contentType = res.headers.get("content-type");
+  if (contentType && contentType.includes("application/json")) {
+    data = await res.json();
+  } else {
+    data = await res.text();
+  }
+  return { status: res.status, data };
 }
 
-// In-memory mock database fixtures
-const mockDatabase = {
-  listings: new Map([
-    [
-      listingId.toString(),
-      {
-        _id: listingId,
-        title: "Sunset Villa",
-        description: "Cozy beach house",
-        price: 2500,
-        location: "Goa",
-        country: "India",
-        owner: ownerId,
-        reviews: [reviewId],
+// Install Stubs on Mongoose Models
+function installMongooseStubs() {
+  Listing.find = function () {
+    const list = Array.from(dbState.listings.values()).map((l) => ({
+      ...l,
+      owner: l.owner ? { ...l.owner } : null,
+    }));
+    return {
+      populate: function (path, select) {
+        // Strip fields not in select
+        if (path === "owner" && select === "username") {
+          list.forEach((item) => {
+            if (item.owner) {
+              item.owner = { _id: item.owner._id, username: item.owner.username };
+            }
+          });
+        }
+        return Promise.resolve(list);
       },
-    ],
-  ]),
-  reviews: new Map([
-    [
-      reviewId.toString(),
-      {
-        _id: reviewId,
-        comment: "Great place!",
-        rating: 5,
-        author: authorId,
+      then: function (resolve) {
+        return Promise.resolve(list).then(resolve);
       },
-    ],
-  ]),
-};
+    };
+  };
 
-// Patch Mongoose model query methods to use fixtures
-Listing.findById = function (id) {
-  const idStr = id ? id.toString() : null;
-  const item = mockDatabase.listings.get(idStr) || null;
-  return {
-    populate: function () {
+  Listing.findById = function (id) {
+    const idStr = id ? id.toString() : null;
+    const found = dbState.listings.get(idStr);
+    if (!found) {
       return {
-        populate: function () {
-          return Promise.resolve(item);
-        },
-        then: function (resolve) {
-          return Promise.resolve(item).then(resolve);
-        },
+        populate: () => ({ populate: () => Promise.resolve(null), then: (r) => Promise.resolve(null).then(r) }),
+        then: (resolve) => Promise.resolve(null).then(resolve),
       };
-    },
-    then: function (resolve) {
-      return Promise.resolve(item).then(resolve);
-    },
+    }
+
+    const item = {
+      ...found,
+      owner: found.owner ? { ...found.owner } : null,
+      reviews: (found.reviews || []).slice(),
+      save: async function () {
+        dbState.listings.set(idStr, this);
+        return this;
+      },
+    };
+
+    return {
+      populate: function (path, select) {
+        if (path === "owner") {
+          if (select === "username" && item.owner) {
+            item.owner = { _id: item.owner._id, username: item.owner.username };
+          }
+        }
+        return {
+          populate: function (nested) {
+            if (nested && nested.path === "reviews") {
+              item.reviews = item.reviews.map((rId) => {
+                const r = dbState.reviews.get(rId.toString());
+                if (!r) return rId;
+                const author = r.author ? { ...r.author } : null;
+                if (nested.populate && nested.populate.select === "username" && author) {
+                  return { ...r, author: { _id: author._id, username: author.username } };
+                }
+                return { ...r, author };
+              });
+            }
+            return Promise.resolve(item);
+          },
+          then: function (resolve) {
+            return Promise.resolve(item).then(resolve);
+          },
+        };
+      },
+      then: function (resolve) {
+        return Promise.resolve(item).then(resolve);
+      },
+    };
   };
-};
 
-Listing.findByIdAndUpdate = function (id, update, options) {
-  const idStr = id ? id.toString() : null;
-  const existing = mockDatabase.listings.get(idStr);
-  if (!existing) return Promise.resolve(null);
-  const updated = { ...existing, ...update };
-  mockDatabase.listings.set(idStr, updated);
-  return Promise.resolve(updated);
-};
-
-Listing.findByIdAndDelete = function (id) {
-  const idStr = id ? id.toString() : null;
-  const existing = mockDatabase.listings.get(idStr);
-  mockDatabase.listings.delete(idStr);
-  return Promise.resolve(existing);
-};
-
-Listing.find = function () {
-  const items = Array.from(mockDatabase.listings.values());
-  return {
-    populate: function () {
-      return Promise.resolve(items);
-    },
-    then: function (resolve) {
-      return Promise.resolve(items).then(resolve);
-    },
+  Listing.findByIdAndUpdate = function (id, update) {
+    const idStr = id ? id.toString() : null;
+    const existing = dbState.listings.get(idStr);
+    if (!existing) return Promise.resolve(null);
+    let updatedReviews = existing.reviews ? existing.reviews.slice() : [];
+    if (update && update.$pull && update.$pull.reviews) {
+      const pullId = update.$pull.reviews.toString();
+      updatedReviews = updatedReviews.filter((r) => r.toString() !== pullId);
+    }
+    const merged = { ...existing, ...update, reviews: updatedReviews };
+    delete merged.$pull;
+    dbState.listings.set(idStr, merged);
+    return Promise.resolve(merged);
   };
-};
 
-Review.findById = function (id) {
-  const idStr = id ? id.toString() : null;
-  const item = mockDatabase.reviews.get(idStr) || null;
-  return Promise.resolve(item);
-};
+  Listing.findByIdAndDelete = function (id) {
+    const idStr = id ? id.toString() : null;
+    const existing = dbState.listings.get(idStr);
+    dbState.listings.delete(idStr);
+    return Promise.resolve(existing || null);
+  };
 
-Review.findByIdAndUpdate = function (id, update, options) {
-  const idStr = id ? id.toString() : null;
-  const existing = mockDatabase.reviews.get(idStr);
-  if (!existing) return Promise.resolve(null);
-  const updated = { ...existing, ...update };
-  mockDatabase.reviews.set(idStr, updated);
-  return Promise.resolve(updated);
-};
+  Listing.prototype.save = async function () {
+    if (!this._id) this._id = new mongoose.Types.ObjectId();
+    const idStr = this._id.toString();
+    const doc = {
+      _id: this._id,
+      title: this.title,
+      description: this.description,
+      price: this.price,
+      location: this.location,
+      country: this.country,
+      image: this.image,
+      owner: this.owner,
+      reviews: this.reviews || [],
+    };
+    dbState.listings.set(idStr, doc);
+    return doc;
+  };
 
-Review.findByIdAndDelete = function (id) {
-  const idStr = id ? id.toString() : null;
-  const existing = mockDatabase.reviews.get(idStr);
-  mockDatabase.reviews.delete(idStr);
-  return Promise.resolve(existing);
-};
+  Review.findById = function (id) {
+    const idStr = id ? id.toString() : null;
+    const found = dbState.reviews.get(idStr);
+    if (!found) return Promise.resolve(null);
+    return Promise.resolve({
+      ...found,
+      author: found.author ? { ...found.author } : null,
+    });
+  };
 
-Review.deleteMany = function () {
-  return Promise.resolve({ deletedCount: 1 });
-};
+  Review.findByIdAndUpdate = function (id, update) {
+    const idStr = id ? id.toString() : null;
+    const existing = dbState.reviews.get(idStr);
+    if (!existing) return Promise.resolve(null);
+    const updated = { ...existing, ...update };
+    dbState.reviews.set(idStr, updated);
+    return Promise.resolve(updated);
+  };
 
-async function main() {
+  Review.findByIdAndDelete = function (id) {
+    const idStr = id ? id.toString() : null;
+    const existing = dbState.reviews.get(idStr);
+    dbState.reviews.delete(idStr);
+    return Promise.resolve(existing || null);
+  };
+
+  Review.deleteMany = function () {
+    return Promise.resolve({ deletedCount: 1 });
+  };
+
+  Review.prototype.save = async function () {
+    if (!this._id) this._id = new mongoose.Types.ObjectId();
+    const idStr = this._id.toString();
+    const doc = {
+      _id: this._id,
+      comment: this.comment,
+      rating: this.rating,
+      author: this.author,
+    };
+    dbState.reviews.set(idStr, doc);
+    return doc;
+  };
+}
+
+function restoreMongooseMethods() {
+  Listing.find = origListingFind;
+  Listing.findById = origListingFindById;
+  Listing.findByIdAndUpdate = origListingFindByIdAndUpdate;
+  Listing.findByIdAndDelete = origListingFindByIdAndDelete;
+  Listing.prototype.save = origListingSave;
+
+  Review.find = origReviewFind;
+  Review.findById = origReviewFindById;
+  Review.findByIdAndUpdate = origReviewFindByIdAndUpdate;
+  Review.findByIdAndDelete = origReviewFindByIdAndDelete;
+  Review.deleteMany = origReviewDeleteMany;
+  Review.prototype.save = origReviewSave;
+}
+
+async function runAllTests() {
   console.log("\n========================================================");
-  console.log("🛡️  NEXTVAULT AUTHORIZATION TEST SUITE");
+  console.log("🛡️  NEXTVAULT ROUTE-LEVEL AUTHORIZATION & CONSISTENCY SUITE");
   console.log("========================================================\n");
 
-  console.log("1. Authentication Middleware (isLoggedIn)");
-  // 1.1 Unauthenticated request returns 401
-  runTest("isLoggedIn rejects unauthenticated request with 401", () => {
-    const req = { isAuthenticated: () => false, user: null };
-    const res = mockResponse();
-    let nextCalled = false;
-    isLoggedIn(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 401);
-    assert.strictEqual(res.body.success, false);
-    assert.strictEqual(nextCalled, false);
+  installMongooseStubs();
+
+  await new Promise((resolve) => {
+    server = app.listen(0, () => {
+      const port = server.address().port;
+      baseUrl = `http://127.0.0.1:${port}`;
+      resolve();
+    });
   });
 
-  // 1.2 Authenticated request passes
-  runTest("isLoggedIn allows authenticated request", () => {
-    const req = { isAuthenticated: () => true, user: { _id: ownerId } };
-    const res = mockResponse();
-    let nextCalled = false;
-    isLoggedIn(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(nextCalled, true);
+  // 1. Unauthenticated Requests
+  console.log("1. Unauthenticated Requests (Must Return 401)");
+  await test("POST /api/listings unauthenticated -> 401", async () => {
+    const res = await request("/api/listings", { method: "POST", body: { title: "Test" } });
+    assert.strictEqual(res.status, 401);
+    assert.strictEqual(res.data.success, false);
   });
 
-  console.log("\n2. Listing Ownership Authorization (isOwner)");
-  // 2.1 Unauthenticated request to isOwner returns 401
-  await runAsyncTest("isOwner rejects unauthenticated request with 401", async () => {
-    const req = { isAuthenticated: () => false, user: null, params: { id: listingId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isOwner(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 401);
-    assert.strictEqual(nextCalled, false);
+  await test("PUT /api/listings/:id unauthenticated -> 401", async () => {
+    const res = await request(`/api/listings/${listing1Id}`, { method: "PUT", body: { title: "New" } });
+    assert.strictEqual(res.status, 401);
   });
 
-  // 2.2 Invalid ObjectId format returns 400
-  await runAsyncTest("isOwner rejects invalid listing ID format with 400", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: ownerId }, params: { id: "not-a-valid-id" } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isOwner(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 400);
-    assert.strictEqual(nextCalled, false);
+  await test("DELETE /api/listings/:id unauthenticated -> 401", async () => {
+    const res = await request(`/api/listings/${listing1Id}`, { method: "DELETE" });
+    assert.strictEqual(res.status, 401);
   });
 
-  // 2.3 Non-existent listing returns 404
-  await runAsyncTest("isOwner returns 404 for missing listing", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: ownerId }, params: { id: nonExistentId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isOwner(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 404);
-    assert.strictEqual(nextCalled, false);
+  await test("POST /api/listings/:id/reviews unauthenticated -> 401", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews`, { method: "POST", body: { comment: "Great", rating: 5 } });
+    assert.strictEqual(res.status, 401);
   });
 
-  // 2.4 Non-owner user returns 403
-  await runAsyncTest("isOwner prevents non-owner with 403 Forbidden", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: strangerId }, params: { id: listingId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isOwner(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 403);
-    assert.strictEqual(nextCalled, false);
+  await test("PUT /api/listings/:id/reviews/:reviewId unauthenticated -> 401", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, { method: "PUT", body: { comment: "Updated" } });
+    assert.strictEqual(res.status, 401);
   });
 
-  // 2.5 Actual owner passes
-  await runAsyncTest("isOwner permits verified listing owner", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: ownerId }, params: { id: listingId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isOwner(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(nextCalled, true);
-    assert.strictEqual(req.listing._id.toString(), listingId.toString());
+  await test("DELETE /api/listings/:id/reviews/:reviewId unauthenticated -> 401", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, { method: "DELETE" });
+    assert.strictEqual(res.status, 401);
   });
 
-  console.log("\n3. Review Author Authorization (isReviewAuthor)");
-  // 3.1 Unauthenticated request returns 401
-  await runAsyncTest("isReviewAuthor rejects unauthenticated request with 401", async () => {
-    const req = { isAuthenticated: () => false, user: null, params: { reviewId: reviewId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isReviewAuthor(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 401);
-    assert.strictEqual(nextCalled, false);
+  // 2. Listing Ownership Authorization
+  console.log("\n2. Listing Ownership Authorization");
+  await test("PUT /api/listings/:id by non-owner -> 403 Forbidden", async () => {
+    const res = await request(`/api/listings/${listing1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "stranger" },
+      body: { title: "Hijacked Title" },
+    });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(dbState.listings.get(listing1Id.toString()).title, "Sunset Villa");
   });
 
-  // 3.2 Invalid ObjectId format returns 400
-  await runAsyncTest("isReviewAuthor rejects invalid review ID format with 400", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: authorId }, params: { reviewId: "invalid-id" } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isReviewAuthor(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 400);
-    assert.strictEqual(nextCalled, false);
+  await test("DELETE /api/listings/:id by non-owner -> 403 Forbidden", async () => {
+    const res = await request(`/api/listings/${listing1Id}`, {
+      method: "DELETE",
+      headers: { "x-test-role": "stranger" },
+    });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(dbState.listings.has(listing1Id.toString()), true);
   });
 
-  // 3.3 Non-existent review returns 404
-  await runAsyncTest("isReviewAuthor returns 404 for missing review", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: authorId }, params: { reviewId: nonExistentId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isReviewAuthor(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 404);
-    assert.strictEqual(nextCalled, false);
+  await test("PUT /api/listings/:id by legitimate owner -> 200 Success", async () => {
+    const res = await request(`/api/listings/${listing1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "owner" },
+      body: { title: "Owner Updated Title", price: 3200 },
+    });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(dbState.listings.get(listing1Id.toString()).title, "Owner Updated Title");
+    assert.strictEqual(dbState.listings.get(listing1Id.toString()).price, 3200);
   });
 
-  // 3.4 Non-author user returns 403
-  await runAsyncTest("isReviewAuthor prevents non-author with 403 Forbidden", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: strangerId }, params: { reviewId: reviewId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isReviewAuthor(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 403);
-    assert.strictEqual(nextCalled, false);
+  await test("DELETE /api/listings/:id by legitimate owner -> 200 Success", async () => {
+    const res = await request(`/api/listings/${listing1Id}`, {
+      method: "DELETE",
+      headers: { "x-test-role": "owner" },
+    });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(dbState.listings.has(listing1Id.toString()), false);
   });
 
-  // 3.5 Actual author passes
-  await runAsyncTest("isReviewAuthor permits verified review author", async () => {
-    const req = { isAuthenticated: () => true, user: { _id: authorId }, params: { reviewId: reviewId.toString() } };
-    const res = mockResponse();
-    let nextCalled = false;
-    await isReviewAuthor(req, res, () => { nextCalled = true; });
-    assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(nextCalled, true);
-    assert.strictEqual(req.review._id.toString(), reviewId.toString());
+  // 3. Review Author Authorization
+  console.log("\n3. Review Author Authorization");
+  await test("PUT /api/listings/:id/reviews/:reviewId by non-author -> 403 Forbidden", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "stranger" },
+      body: { comment: "Hacked comment" },
+    });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(dbState.reviews.get(review1Id.toString()).comment, "Loved the sunset!");
   });
 
-  console.log("\n4. Anti-Spoofing and Parameter Tampering Checks");
-  // 4.1 Server overrides spoofed owner ID on listing creation
-  runTest("Listing creation sets owner from session and ignores payload owner ID", () => {
-    const spoofedOwnerId = new mongoose.Types.ObjectId();
-    const reqBody = {
-      title: "Hacker Villa",
-      description: "Trying to spoof owner",
-      price: 1000,
-      owner: spoofedOwnerId.toString(),
+  await test("DELETE /api/listings/:id/reviews/:reviewId by non-author -> 403 Forbidden", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, {
+      method: "DELETE",
+      headers: { "x-test-role": "stranger" },
+    });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(dbState.reviews.has(review1Id.toString()), true);
+  });
+
+  await test("PUT /api/listings/:id/reviews/:reviewId by verified author -> 200 Success", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "author" },
+      body: { comment: "Author updated review", rating: 4 },
+    });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(dbState.reviews.get(review1Id.toString()).comment, "Author updated review");
+    assert.strictEqual(dbState.reviews.get(review1Id.toString()).rating, 4);
+  });
+
+  await test("DELETE /api/listings/:id/reviews/:reviewId by verified author -> 200 Success", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, {
+      method: "DELETE",
+      headers: { "x-test-role": "author" },
+    });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(dbState.reviews.has(review1Id.toString()), false);
+    // Listing references must be updated
+    const updatedListing = dbState.listings.get(listing1Id.toString());
+    assert.strictEqual(updatedListing.reviews.includes(review1Id.toString()), false);
+  });
+
+  // 4. Anti-Spoofing & Parameter Tampering
+  console.log("\n4. Anti-Spoofing & Parameter Tampering on Real Endpoints");
+  await test("POST /api/listings ignores spoofed owner field in request body", async () => {
+    const spoofedOwner = new mongoose.Types.ObjectId();
+    const res = await request("/api/listings", {
+      method: "POST",
+      headers: { "x-test-role": "owner" },
+      body: {
+        title: "New Villa",
+        price: 2000,
+        owner: spoofedOwner.toString(), // Attacker tries to set owner
+      },
+    });
+    assert.strictEqual(res.status, 201);
+    const createdId = res.data.data._id.toString();
+    const created = dbState.listings.get(createdId);
+    assert.strictEqual(created.owner.toString(), ownerId.toString());
+    assert.notStrictEqual(created.owner.toString(), spoofedOwner.toString());
+  });
+
+  await test("PUT /api/listings/:id strips owner field tampering", async () => {
+    const attackerOwner = new mongoose.Types.ObjectId();
+    const res = await request(`/api/listings/${listing1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "owner" },
+      body: {
+        title: "Changed Title",
+        owner: attackerOwner.toString(),
+      },
+    });
+    assert.strictEqual(res.status, 200);
+    const updated = dbState.listings.get(listing1Id.toString());
+    assert.strictEqual(updated.title, "Changed Title");
+    assert.strictEqual(updated.owner._id.toString(), ownerId.toString());
+    assert.notStrictEqual(updated.owner._id.toString(), attackerOwner.toString());
+  });
+
+  await test("POST /api/listings/:id/reviews ignores spoofed author field in request body", async () => {
+    const spoofedAuthor = new mongoose.Types.ObjectId();
+    const res = await request(`/api/listings/${listing1Id}/reviews`, {
+      method: "POST",
+      headers: { "x-test-role": "author" },
+      body: {
+        comment: "Nice place",
+        rating: 5,
+        author: spoofedAuthor.toString(),
+      },
+    });
+    assert.strictEqual(res.status, 201);
+    const createdReviewId = res.data.data._id.toString();
+    const created = dbState.reviews.get(createdReviewId);
+    assert.strictEqual(created.author.toString(), authorId.toString());
+    assert.notStrictEqual(created.author.toString(), spoofedAuthor.toString());
+  });
+
+  await test("PUT /api/listings/:id/reviews/:reviewId strips author tampering", async () => {
+    const spoofedAuthor = new mongoose.Types.ObjectId();
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "author" },
+      body: {
+        comment: "Legit update",
+        author: spoofedAuthor.toString(),
+      },
+    });
+    assert.strictEqual(res.status, 200);
+    const updated = dbState.reviews.get(review1Id.toString());
+    assert.strictEqual(updated.comment, "Legit update");
+    assert.strictEqual(updated.author._id.toString(), authorId.toString());
+    assert.notStrictEqual(updated.author._id.toString(), spoofedAuthor.toString());
+  });
+
+  // 5. Review-Listing Consistency (Finding 1)
+  console.log("\n5. Review-Listing Consistency (Cross-Listing Tampering Prevention)");
+  await test("PUT review belonging to Listing 1 via Listing 2 URL returns 404", async () => {
+    const res = await request(`/api/listings/${listing2Id}/reviews/${review1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "author" },
+      body: { comment: "Tampering across listings" },
+    });
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.data.success, false);
+    // Ensure review was not modified
+    assert.strictEqual(dbState.reviews.get(review1Id.toString()).comment, "Loved the sunset!");
+  });
+
+  await test("DELETE review belonging to Listing 1 via Listing 2 URL returns 404", async () => {
+    const res = await request(`/api/listings/${listing2Id}/reviews/${review1Id}`, {
+      method: "DELETE",
+      headers: { "x-test-role": "author" },
+    });
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.data.success, false);
+    // Ensure neither review nor listing was touched
+    assert.strictEqual(dbState.reviews.has(review1Id.toString()), true);
+    assert.strictEqual(dbState.listings.get(listing2Id.toString()).reviews.includes(review2Id), true);
+  });
+
+  // 6. Database Failure Rollback on Review Creation (Finding 2)
+  console.log("\n6. Database Failure Rollback on Review Creation");
+  await test("Database failure on listing.save() rolls back created review and returns 500", async () => {
+    // Stub listing.save to throw a genuine database error
+    const origFindById = Listing.findById;
+    Listing.findById = function (id) {
+      const idStr = id.toString();
+      const listing = dbState.listings.get(idStr);
+      return Promise.resolve({
+        ...listing,
+        reviews: (listing.reviews || []).slice(),
+        save: async function () {
+          throw new Error("Simulated Disk Full DB Failure");
+        },
+      });
     };
-    const sessionUserId = ownerId;
 
-    // Simulate route logic
-    const createdDoc = new Listing({
-      ...reqBody,
-      owner: sessionUserId, // Server enforces session user
+    const initialReviewCount = dbState.reviews.size;
+    const res = await request(`/api/listings/${listing1Id}/reviews`, {
+      method: "POST",
+      headers: { "x-test-role": "author" },
+      body: { comment: "This will fail on listing save", rating: 3 },
     });
 
-    assert.strictEqual(createdDoc.owner.toString(), sessionUserId.toString());
-    assert.notStrictEqual(createdDoc.owner.toString(), spoofedOwnerId.toString());
+    Listing.findById = origFindById; // restore
+
+    assert.strictEqual(res.status, 500);
+    assert.strictEqual(res.data.success, false);
+    assert.strictEqual(res.data.message.includes("Simulated Disk Full"), true);
+    // Ensure no orphan review was left behind
+    assert.strictEqual(dbState.reviews.size, initialReviewCount);
   });
 
-  // 4.2 Listing update rejects / ignores owner reassignment
-  await runAsyncTest("Listing update preserves original owner when attacker tries to change it", async () => {
-    const attackerNewOwnerId = new mongoose.Types.ObjectId();
-    const reqBody = {
-      title: "Updated Title",
-      owner: attackerNewOwnerId.toString(), // Malicious attempt to hijack ownership
-    };
-
-    // Route logic whitelist
-    const { title, description, price, location, country, image } = reqBody;
-    const updateData = {};
-    if (title !== undefined) updateData.title = title;
-    if (description !== undefined) updateData.description = description;
-    if (price !== undefined) updateData.price = price;
-    if (location !== undefined) updateData.location = location;
-    if (country !== undefined) updateData.country = country;
-    if (image !== undefined) updateData.image = image;
-
-    await Listing.findByIdAndUpdate(listingId, updateData);
-    const updated = mockDatabase.listings.get(listingId.toString());
-
-    assert.strictEqual(updated.title, "Updated Title");
-    assert.strictEqual(updated.owner.toString(), ownerId.toString());
-    assert.notStrictEqual(updated.owner.toString(), attackerNewOwnerId.toString());
-  });
-
-  // 4.3 Review creation sets author from session and ignores payload author ID
-  runTest("Review creation sets author from session and ignores payload author ID", () => {
-    const spoofedAuthorId = new mongoose.Types.ObjectId();
-    const reqBody = {
-      comment: "Spoofed review",
-      rating: 4,
-      author: spoofedAuthorId.toString(),
-    };
-    const sessionUserId = authorId;
-
-    // Simulate route logic
-    const createdDoc = new Review({
-      ...reqBody,
-      author: sessionUserId, // Server enforces session user
+  // 7. Email Privacy on Public Endpoints (Finding 3)
+  console.log("\n7. Email Privacy on Public Endpoints");
+  await test("GET /api/listings does not expose owner email", async () => {
+    const res = await request("/api/listings");
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(Array.isArray(res.data.data), true);
+    res.data.data.forEach((listing) => {
+      if (listing.owner) {
+        assert.strictEqual(listing.owner.email, undefined);
+        assert.strictEqual(typeof listing.owner.username, "string");
+      }
     });
-
-    assert.strictEqual(createdDoc.author.toString(), sessionUserId.toString());
-    assert.notStrictEqual(createdDoc.author.toString(), spoofedAuthorId.toString());
   });
 
-  // 4.4 Review update rejects / ignores author reassignment
-  await runAsyncTest("Review update preserves original author when attacker tries to change it", async () => {
-    const attackerNewAuthorId = new mongoose.Types.ObjectId();
-    const reqBody = {
-      comment: "Updated comment",
-      author: attackerNewAuthorId.toString(), // Malicious attempt to change author
-    };
-
-    const { comment, rating } = reqBody;
-    const updateData = {};
-    if (comment !== undefined) updateData.comment = comment;
-    if (rating !== undefined) updateData.rating = rating;
-
-    await Review.findByIdAndUpdate(reviewId, updateData);
-    const updated = mockDatabase.reviews.get(reviewId.toString());
-
-    assert.strictEqual(updated.comment, "Updated comment");
-    assert.strictEqual(updated.author.toString(), authorId.toString());
-    assert.notStrictEqual(updated.author.toString(), attackerNewAuthorId.toString());
+  await test("GET /api/listings/:id does not expose owner or review author emails", async () => {
+    const res = await request(`/api/listings/${listing1Id}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.data.data.owner.email, undefined);
+    assert.strictEqual(res.data.data.reviews[0].author.email, undefined);
+    assert.strictEqual(res.data.data.owner.username, "listingOwner");
+    assert.strictEqual(res.data.data.reviews[0].author.username, "reviewAuthor");
   });
 
-  console.log("\n5. Public Endpoints Verification");
-  // 5.1 Public GET /api/listings works without auth
-  await runAsyncTest("Public GET /api/listings retrieves listings without authentication", async () => {
-    const listings = await Listing.find({}).populate("owner");
-    assert.strictEqual(Array.isArray(listings), true);
-    assert.strictEqual(listings.length > 0, true);
+  await test("GET /api/listings/:id/reviews does not expose review author email", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(Array.isArray(res.data.data), true);
+    res.data.data.forEach((review) => {
+      if (review.author) {
+        assert.strictEqual(review.author.email, undefined);
+        assert.strictEqual(typeof review.author.username, "string");
+      }
+    });
   });
 
-  // 5.2 Public GET /api/listings/:id works without auth
-  await runAsyncTest("Public GET /api/listings/:id retrieves listing without authentication", async () => {
-    const listing = await Listing.findById(listingId).populate("owner");
-    assert.strictEqual(Boolean(listing), true);
-    assert.strictEqual(listing._id.toString(), listingId.toString());
+  // 8. Invalid IDs and Missing Resources
+  console.log("\n8. Invalid IDs and Missing Resources");
+  await test("GET /api/listings/invalid-id -> 400 Bad Request", async () => {
+    const res = await request("/api/listings/not-a-valid-object-id");
+    assert.strictEqual(res.status, 400);
   });
+
+  await test("GET /api/listings/:nonExistentId -> 404 Not Found", async () => {
+    const res = await request(`/api/listings/${nonExistentId}`);
+    assert.strictEqual(res.status, 404);
+  });
+
+  await test("POST /api/listings/invalid-id/reviews -> 400 Bad Request", async () => {
+    const res = await request("/api/listings/not-a-valid-id/reviews", {
+      method: "POST",
+      headers: { "x-test-role": "author" },
+      body: { comment: "Hi", rating: 5 },
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
+  await test("POST /api/listings/:nonExistentId/reviews -> 404 Not Found", async () => {
+    const res = await request(`/api/listings/${nonExistentId}/reviews`, {
+      method: "POST",
+      headers: { "x-test-role": "author" },
+      body: { comment: "Hi", rating: 5 },
+    });
+    assert.strictEqual(res.status, 404);
+  });
+
+  await test("PUT /api/listings/:id/reviews/invalid-id -> 400 Bad Request", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/bad-id`, {
+      method: "PUT",
+      headers: { "x-test-role": "author" },
+      body: { comment: "Hi" },
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
+  await test("PUT /api/listings/:id/reviews/:nonExistentId -> 404 Not Found", async () => {
+    const res = await request(`/api/listings/${listing1Id}/reviews/${nonExistentId}`, {
+      method: "PUT",
+      headers: { "x-test-role": "author" },
+      body: { comment: "Hi" },
+    });
+    assert.strictEqual(res.status, 404);
+  });
+
+  // Teardown
+  await new Promise((resolve) => server.close(resolve));
+  restoreMongooseMethods();
 
   console.log("\n--------------------------------------------------------");
-  console.log(`Results: ${passedTests}/${totalTests} tests passed (${Math.round((passedTests / totalTests) * 100)}%)`);
+  console.log(`Results: ${passedCount}/${totalCount} tests passed (${Math.round((passedCount / totalCount) * 100)}%)`);
   console.log("--------------------------------------------------------\n");
 
-  if (passedTests !== totalTests) {
+  if (passedCount !== totalCount) {
     process.exit(1);
   }
 }
 
-main().catch((err) => {
-  console.error("Test runner encountered an error:", err);
+runAllTests().catch((err) => {
+  console.error("Test execution error:", err);
+  if (server) server.close();
+  restoreMongooseMethods();
   process.exit(1);
 });

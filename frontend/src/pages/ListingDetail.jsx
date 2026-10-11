@@ -10,11 +10,36 @@ function ListingDetail({ user }) {
   const [rating, setRating] = useState(3);
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  const getErrorMessage = (err, defaultMsg) => {
+    if (err?.response) {
+      const status = err.response.status;
+      if (status === 401) {
+        return "You must be logged in to perform this action. Please log in.";
+      }
+      if (status === 403) {
+        return "Permission denied: You do not have permission to perform this action.";
+      }
+      if (status === 404) {
+        return err.response.data?.message || "Requested resource not found.";
+      }
+      if (status === 400) {
+        return err.response.data?.message || "Invalid request. Please check your input.";
+      }
+      if (err.response.data?.message) {
+        return err.response.data.message;
+      }
+    }
+    return defaultMsg || "An unexpected error occurred. Please try again.";
+  };
 
   const fetchListing = () => {
     getListing(id)
       .then((res) => setListing(res.data.data))
-      .catch((err) => console.error(err))
+      .catch((err) => {
+        setActionError(getErrorMessage(err, "Failed to load listing details."));
+      })
       .finally(() => setLoading(false));
   };
 
@@ -24,35 +49,38 @@ function ListingDetail({ user }) {
 
   const handleDelete = async () => {
     if (!confirm("Delete this listing?")) return;
+    setActionError("");
     try {
       await deleteListing(id);
       navigate("/listings");
     } catch (err) {
-      console.error(err);
+      setActionError(getErrorMessage(err, "Failed to delete listing."));
     }
   };
 
   const handleReviewSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
+    setActionError("");
     try {
       await createReview(id, { rating, comment });
       setComment("");
       setRating(3);
-      fetchListing();
+      await fetchListing();
     } catch (err) {
-      console.error(err);
+      setActionError(getErrorMessage(err, "Failed to submit review."));
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleDeleteReview = async (reviewId) => {
+    setActionError("");
     try {
       await deleteReview(id, reviewId);
-      fetchListing();
+      await fetchListing();
     } catch (err) {
-      console.error(err);
+      setActionError(getErrorMessage(err, "Failed to delete review."));
     }
   };
 
@@ -69,6 +97,7 @@ function ListingDetail({ user }) {
       <div className="empty-state">
         <i className="fa-solid fa-house-circle-xmark"></i>
         <h3>Listing not found</h3>
+        {actionError && <p style={{ color: "var(--accent-color)", marginTop: "0.5rem" }}>{actionError}</p>}
         <Link to="/listings" className="btn btn-primary" style={{ marginTop: "1rem" }}>Back to Listings</Link>
       </div>
     );
@@ -81,6 +110,13 @@ function ListingDetail({ user }) {
         alt={listing.title}
         className="detail-hero-img"
       />
+
+      {actionError && (
+        <div className="flash-message flash-error" style={{ marginBottom: "1.5rem" }}>
+          <i className="fa-solid fa-circle-exclamation" style={{ marginRight: "8px" }}></i>
+          {actionError}
+        </div>
+      )}
 
       <div className="detail-header">
         <div>

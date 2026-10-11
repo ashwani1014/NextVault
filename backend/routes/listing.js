@@ -8,7 +8,7 @@ const { isLoggedIn, isOwner } = require("../middleware/auth.js");
 // GET all listings (public)
 router.get("/", async (req, res) => {
   try {
-    const allListings = await Listing.find({}).populate("owner", "username email");
+    const allListings = await Listing.find({}).populate("owner", "username");
     res.json({ success: true, data: allListings });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -23,12 +23,12 @@ router.get("/:id", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid listing ID" });
     }
     const listing = await Listing.findById(id)
-      .populate("owner", "username email")
+      .populate("owner", "username")
       .populate({
         path: "reviews",
         populate: {
           path: "author",
-          select: "username email",
+          select: "username",
         },
       });
     if (!listing) {
