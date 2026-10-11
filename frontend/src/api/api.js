@@ -15,6 +15,7 @@ export const deleteListing = (id) => API.delete(`/listings/${id}`);
 // ─── Reviews ───
 export const getReviews = (listingId) => API.get(`/listings/${listingId}/reviews`);
 export const createReview = (listingId, data) => API.post(`/listings/${listingId}/reviews`, data);
+export const updateReview = (listingId, reviewId, data) => API.put(`/listings/${listingId}/reviews/${reviewId}`, data);
 export const deleteReview = (listingId, reviewId) => API.delete(`/listings/${listingId}/reviews/${reviewId}`);
 
 // ─── Auth ───
