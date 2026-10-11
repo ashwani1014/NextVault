@@ -98,16 +98,23 @@ function ListingDetail({ user }) {
       <div className="detail-meta">
         <span><i className="fa-solid fa-location-dot"></i>{listing.location}</span>
         <span><i className="fa-solid fa-flag"></i>{listing.country}</span>
+        {listing.owner?.username && (
+          <span><i className="fa-solid fa-user"></i>Hosted by {listing.owner.username}</span>
+        )}
         <span><i className="fa-solid fa-star"></i>{listing.reviews?.length || 0} reviews</span>
       </div>
 
       <div className="detail-actions">
-        <Link to={`/listings/${id}/edit`} className="btn btn-secondary">
-          <i className="fa-solid fa-pen"></i> Edit
-        </Link>
-        <button onClick={handleDelete} className="btn btn-danger">
-          <i className="fa-solid fa-trash"></i> Delete
-        </button>
+        {user && listing?.owner && ((listing.owner._id || listing.owner) === user._id) && (
+          <>
+            <Link to={`/listings/${id}/edit`} className="btn btn-secondary">
+              <i className="fa-solid fa-pen"></i> Edit
+            </Link>
+            <button onClick={handleDelete} className="btn btn-danger">
+              <i className="fa-solid fa-trash"></i> Delete
+            </button>
+          </>
+        )}
         <Link to="/listings" className="btn btn-secondary">
           <i className="fa-solid fa-arrow-left"></i> Back
         </Link>
@@ -124,60 +131,77 @@ function ListingDetail({ user }) {
           </div>
         )}
 
-        {listing.reviews?.map((review) => (
-          <div className="review-card" key={review._id}>
-            <div className="review-header">
-              <span className="review-stars">
-                {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
-                <span style={{ color: "var(--text-muted)", marginLeft: "6px" }}>{review.rating}/5</span>
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-                <span className="review-date">
-                  {new Date(review.createdAt).toLocaleDateString("en-IN")}
-                </span>
-                {user && (
-                  <button
-                    onClick={() => handleDeleteReview(review._id)}
-                    style={{ background: "none", border: "none", color: "#ff4757", cursor: "pointer", fontSize: "0.8rem" }}
-                  >
-                    <i className="fa-solid fa-trash"></i>
-                  </button>
-                )}
+        {listing.reviews?.map((review) => {
+          const isReviewAuthor = user && review.author && ((review.author._id || review.author) === user._id);
+          return (
+            <div className="review-card" key={review._id}>
+              <div className="review-header">
+                <div>
+                  <span className="review-stars">
+                    {"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}
+                    <span style={{ color: "var(--text-muted)", marginLeft: "6px" }}>{review.rating}/5</span>
+                  </span>
+                  {review.author?.username && (
+                    <span style={{ marginLeft: "10px", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      by <strong>{review.author.username}</strong>
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                  <span className="review-date">
+                    {new Date(review.createdAt).toLocaleDateString("en-IN")}
+                  </span>
+                  {isReviewAuthor && (
+                    <button
+                      onClick={() => handleDeleteReview(review._id)}
+                      style={{ background: "none", border: "none", color: "#ff4757", cursor: "pointer", fontSize: "0.8rem" }}
+                      title="Delete your review"
+                    >
+                      <i className="fa-solid fa-trash"></i>
+                    </button>
+                  )}
+                </div>
               </div>
+              <p className="review-text">{review.comment}</p>
             </div>
-            <p className="review-text">{review.comment}</p>
-          </div>
-        ))}
+          );
+        })}
 
         {/* Review Form */}
         <div className="review-form">
           <h3>Leave a Review</h3>
-          <form onSubmit={handleReviewSubmit} className="form-card">
-            <div className="form-group">
-              <label className="form-label">Rating</label>
-              <div className="range-wrapper">
-                <input
-                  type="range" min="1" max="5" value={rating}
-                  onChange={(e) => setRating(Number(e.target.value))}
-                />
-                <span className="range-value">{rating}</span>
+          {user ? (
+            <form onSubmit={handleReviewSubmit} className="form-card">
+              <div className="form-group">
+                <label className="form-label">Rating</label>
+                <div className="range-wrapper">
+                  <input
+                    type="range" min="1" max="5" value={rating}
+                    onChange={(e) => setRating(Number(e.target.value))}
+                  />
+                  <span className="range-value">{rating}</span>
+                </div>
               </div>
+              <div className="form-group">
+                <label className="form-label">Comment</label>
+                <textarea
+                  className="form-input"
+                  placeholder="Share your experience..."
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  required
+                  rows={4}
+                />
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={submitting}>
+                {submitting ? <><i className="fa-solid fa-spinner fa-spin"></i> Submitting...</> : <><i className="fa-solid fa-paper-plane"></i> Submit Review</>}
+              </button>
+            </form>
+          ) : (
+            <div className="empty-state" style={{ padding: "1.5rem" }}>
+              <p>Please <Link to="/login" style={{ color: "var(--primary-color)", fontWeight: 600 }}>log in</Link> to leave a review.</p>
             </div>
-            <div className="form-group">
-              <label className="form-label">Comment</label>
-              <textarea
-                className="form-input"
-                placeholder="Share your experience..."
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                required
-                rows={4}
-              />
-            </div>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting ? <><i className="fa-solid fa-spinner fa-spin"></i> Submitting...</> : <><i className="fa-solid fa-paper-plane"></i> Submit Review</>}
-            </button>
-          </form>
+          )}
         </div>
       </div>
     </div>
