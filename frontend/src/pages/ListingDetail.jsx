@@ -70,11 +70,17 @@ function ListingDetail({ user }) {
       await createReview(id, { rating, comment });
       setComment("");
       setRating(3);
-      await fetchListing();
     } catch (err) {
       setActionError(getErrorMessage(err, "Failed to submit review."));
+      return;
     } finally {
       setSubmitting(false);
+    }
+    // Refresh listing separately — mutation already succeeded
+    try {
+      await fetchListing();
+    } catch {
+      setActionError("Review submitted, but failed to refresh listing. Please reload the page.");
     }
   };
 
@@ -82,9 +88,15 @@ function ListingDetail({ user }) {
     setActionError("");
     try {
       await deleteReview(id, reviewId);
-      await fetchListing();
     } catch (err) {
       setActionError(getErrorMessage(err, "Failed to delete review."));
+      return;
+    }
+    // Refresh listing separately — mutation already succeeded
+    try {
+      await fetchListing();
+    } catch {
+      setActionError("Review deleted, but failed to refresh listing. Please reload the page.");
     }
   };
 

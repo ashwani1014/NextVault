@@ -11,7 +11,8 @@ router.get("/", async (req, res) => {
     const allListings = await Listing.find({}).populate("owner", "username");
     res.json({ success: true, data: allListings });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Error fetching listings:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 
@@ -36,7 +37,8 @@ router.get("/:id", async (req, res) => {
     }
     res.json({ success: true, data: listing });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Error fetching listing:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 
@@ -57,7 +59,11 @@ router.post("/", isLoggedIn, async (req, res) => {
     await newListing.save();
     res.status(201).json({ success: true, data: newListing });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    console.error("❌ Error creating listing:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 
@@ -81,7 +87,11 @@ router.put("/:id", isLoggedIn, isOwner, async (req, res) => {
     );
     res.json({ success: true, data: updatedListing });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    console.error("❌ Error updating listing:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 
@@ -95,7 +105,8 @@ router.delete("/:id", isLoggedIn, isOwner, async (req, res) => {
     await Listing.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: "Listing deleted" });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Error deleting listing:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 

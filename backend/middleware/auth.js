@@ -35,7 +35,8 @@ const isOwner = async (req, res, next) => {
     req.listing = listing;
     next();
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Listing authorization error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to authorize listing request." });
   }
 };
 
@@ -94,7 +95,8 @@ const isReviewAuthor = async (req, res, next) => {
     req.review = review;
     next();
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Review authorization error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to authorize review request." });
   }
 };
 

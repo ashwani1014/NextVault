@@ -581,21 +581,31 @@ async function runAllTests() {
     assert.strictEqual(dbState.listings.get(listing2Id.toString()).reviews.includes(review2Id), true);
   });
 
-  await test("Listing.exists is used for efficient review-listing association check", async () => {
-    let existsCalled = false;
-    const currentExists = Listing.exists;
-    Listing.exists = function (filter) {
-      existsCalled = true;
-      return currentExists.call(this, filter);
-    };
-    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, {
+  await test("Cross-listing review update via wrong listing is rejected regardless of implementation", async () => {
+    // Review1 belongs to Listing1, Review2 belongs to Listing2.
+    // Attempting to update Review2 through Listing1's URL must fail.
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review2Id}`, {
       method: "PUT",
       headers: { "x-test-role": "author" },
-      body: { comment: "Testing exists query", rating: 5 },
+      body: { comment: "Cross-listing tamper attempt" },
     });
-    Listing.exists = currentExists;
-    assert.strictEqual(res.status, 200);
-    assert.strictEqual(existsCalled, true);
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.data.success, false);
+    // Ensure Review2 was not modified
+    assert.strictEqual(dbState.reviews.get(review2Id.toString()).comment, "Chilly and scenic!");
+  });
+
+  await test("Cross-listing review delete via wrong listing is rejected regardless of implementation", async () => {
+    // Review2 belongs to Listing2. Attempting to delete it via Listing1 must fail.
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review2Id}`, {
+      method: "DELETE",
+      headers: { "x-test-role": "author" },
+    });
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.data.success, false);
+    assert.strictEqual(dbState.reviews.has(review2Id.toString()), true);
+    // Listing2 must still reference its review
+    assert.strictEqual(dbState.listings.get(listing2Id.toString()).reviews.some(r => r.toString() === review2Id.toString()), true);
   });
 
   // 6. Database Failure Rollback on Review Creation (Finding 2 & 3)
