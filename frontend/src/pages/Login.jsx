@@ -7,15 +7,46 @@ function Login({ setUser }) {
   const [form, setForm] = useState({ username: "", password: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({ username: "", password: "" });
 
-  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+  const validateForm = () => {
+    const errors = {};
+    const trimmedUsername = form.username.trim();
+
+    if (!trimmedUsername) {
+      errors.username = "Username is required.";
+    } else if (trimmedUsername.length < 3) {
+      errors.username = "Username must be at least 3 characters.";
+    }
+
+    if (!form.password) {
+      errors.password = "Password is required.";
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setForm({ ...form, [name]: value });
+    // Clear field error when user starts typing
+    if (fieldErrors[name]) {
+      setFieldErrors({ ...fieldErrors, [name]: "" });
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (!validateForm()) {
+      return;
+    }
+
     setLoading(true);
     setError("");
     try {
-      const res = await login(form);
+      const res = await login({ username: form.username.trim(), password: form.password });
       setUser(res.data.data);
       navigate("/listings");
     } catch (err) {
@@ -37,11 +68,29 @@ function Login({ setUser }) {
           <form onSubmit={handleSubmit}>
             <div className="form-group">
               <label className="form-label">Username</label>
-              <input name="username" type="text" className="form-input" placeholder="yourname" value={form.username} onChange={handleChange} required />
+              <input
+                name="username"
+                type="text"
+                className={`form-input ${fieldErrors.username ? "input-error" : ""}`}
+                placeholder="yourname"
+                value={form.username}
+                onChange={handleChange}
+                disabled={loading}
+              />
+              {fieldErrors.username && <div className="field-error">{fieldErrors.username}</div>}
             </div>
             <div className="form-group">
               <label className="form-label">Password</label>
-              <input name="password" type="password" className="form-input" placeholder="Your password" value={form.password} onChange={handleChange} required />
+              <input
+                name="password"
+                type="password"
+                className={`form-input ${fieldErrors.password ? "input-error" : ""}`}
+                placeholder="Your password"
+                value={form.password}
+                onChange={handleChange}
+                disabled={loading}
+              />
+              {fieldErrors.password && <div className="field-error">{fieldErrors.password}</div>}
             </div>
             <button type="submit" className="btn btn-primary btn-block" disabled={loading}>
               {loading ? <><i className="fa-solid fa-spinner fa-spin"></i> Logging in...</> : <><i className="fa-solid fa-right-to-bracket"></i> Log In</>}

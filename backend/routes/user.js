@@ -3,16 +3,51 @@ const router = express.Router();
 const passport = require("passport");
 const User = require("../models/user.js");
 
+// Validation helpers
+const validateEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+const validatePassword = (password) => {
+  return password && password.length >= 6;
+};
+
+const validateUsername = (username) => {
+  return username && username.trim().length >= 3;
+};
+
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   try {
     const { username, email, password } = req.body;
-    const newUser = new User({ email, username });
+
+    // Backend validation
+    if (!username || !email || !password) {
+      return res.status(400).json({ success: false, message: "All fields are required." });
+    }
+
+    const trimmedUsername = username.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!validateUsername(trimmedUsername)) {
+      return res.status(400).json({ success: false, message: "Username must be at least 3 characters." });
+    }
+
+    if (!validateEmail(trimmedEmail)) {
+      return res.status(400).json({ success: false, message: "Please provide a valid email address." });
+    }
+
+    if (!validatePassword(password)) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+    }
+
+    const newUser = new User({ email: trimmedEmail, username: trimmedUsername });
     const registeredUser = await User.register(newUser, password);
 
     req.login(registeredUser, (err) => {
       if (err) {
-        return res.status(500).json({ success: false, message: err.message });
+        return res.status(500).json({ success: false, message: "Registration failed. Please try again." });
       }
       res.status(201).json({
         success: true,
@@ -24,20 +59,55 @@ router.post("/signup", async (req, res) => {
       });
     });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    // Handle duplicate email/username errors from passport-local-mongoose
+    if (err.name === 'UserExistsError') {
+      return res.status(400).json({ success: false, message: "Username or email already exists." });
+    }
+    res.status(400).json({ success: false, message: "Registration failed. Please try again." });
   }
 });
 
 // POST /api/auth/login
-router.post("/login", passport.authenticate("local"), (req, res) => {
-  res.json({
-    success: true,
-    data: {
-      _id: req.user._id,
-      username: req.user.username,
-      email: req.user.email,
-    },
-  });
+router.post("/login", (req, res, next) => {
+  const { username, password } = req.body;
+
+  // Backend validation
+  if (!username || !password) {
+    return res.status(400).json({ success: false, message: "Username and password are required." });
+  }
+
+  if (!username.trim()) {
+    return res.status(400).json({ success: false, message: "Username is required." });
+  }
+
+  if (!password) {
+    return res.status(400).json({ success: false, message: "Password is required." });
+  }
+
+  // Use trimmed username for authentication
+  req.body.username = username.trim();
+
+  passport.authenticate("local", (err, user, info) => {
+    if (err) {
+      return res.status(500).json({ success: false, message: "Login failed. Please try again." });
+    }
+    if (!user) {
+      return res.status(401).json({ success: false, message: "Invalid username or password." });
+    }
+    req.logIn(user, (err) => {
+      if (err) {
+        return res.status(500).json({ success: false, message: "Login failed. Please try again." });
+      }
+      res.json({
+        success: true,
+        data: {
+          _id: req.user._id,
+          username: req.user.username,
+          email: req.user.email,
+        },
+      });
+    });
+  })(req, res, next);
 });
 
 // GET /api/auth/logout
