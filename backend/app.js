@@ -1,3 +1,6 @@
+// Load environment variables from .env file
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const session = require("express-session");
@@ -13,11 +16,20 @@ const userRoutes = require("./routes/user.js");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+const NODE_ENV = process.env.NODE_ENV || "development";
 
 // ─── Environment Variable Validation ───
-if (!process.env.SESSION_SECRET) {
-  console.error("❌ Error: SESSION_SECRET environment variable is required");
-  process.exit(1);
+if (NODE_ENV === "production") {
+  if (!process.env.SESSION_SECRET) {
+    console.error("❌ Error: SESSION_SECRET environment variable is required in production");
+    process.exit(1);
+  }
+} else {
+  // For local development, use a default if not set
+  if (!process.env.SESSION_SECRET) {
+    console.warn("⚠️  Warning: Using default SESSION_SECRET for development. Set SESSION_SECRET in .env for security.");
+    process.env.SESSION_SECRET = "dev-secret-key-change-in-production";
+  }
 }
 
 // ─── Middleware ───
