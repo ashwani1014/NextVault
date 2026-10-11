@@ -1,6 +1,8 @@
+
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
+
 const Listing = require("../models/listing.js");
 const Review = require("../models/review.js");
 const { isLoggedIn, isOwner } = require("../middleware/auth.js");
@@ -8,11 +10,20 @@ const { isLoggedIn, isOwner } = require("../middleware/auth.js");
 // GET all listings (public)
 router.get("/", async (req, res) => {
   try {
-    const allListings = await Listing.find({}).populate("owner", "username");
-    res.json({ success: true, data: allListings });
+    const allListings = await Listing.find({})
+      .populate("owner", "username");
+
+    return res.json({
+      success: true,
+      data: allListings,
+    });
   } catch (err) {
-    console.error("❌ Error fetching listings:", err.message);
-    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
+    console.error("Error fetching listings:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred. Please try again.",
+    });
   }
 });
 
@@ -20,9 +31,14 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid listing ID" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid listing ID.",
+      });
     }
+
     const listing = await Listing.findById(id)
       .populate("owner", "username")
       .populate({
@@ -32,21 +48,41 @@ router.get("/:id", async (req, res) => {
           select: "username",
         },
       });
+
     if (!listing) {
-      return res.status(404).json({ success: false, message: "Listing not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found.",
+      });
     }
-    res.json({ success: true, data: listing });
+
+    return res.json({
+      success: true,
+      data: listing,
+    });
   } catch (err) {
-    console.error("❌ Error fetching listing:", err.message);
-    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
+    console.error("Error fetching listing:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred. Please try again.",
+    });
   }
 });
 
-// POST create new listing (protected: authenticated users only)
+// POST create new listing (authenticated users only)
 router.post("/", isLoggedIn, async (req, res) => {
   try {
-    const { title, description, price, location, country, image } = req.body;
-    // Always assign owner from authenticated session user (never trust req.body.owner)
+    const {
+      title,
+      description,
+      price,
+      location,
+      country,
+      image,
+    } = req.body;
+
+    // Never trust owner supplied in the request body.
     const newListing = new Listing({
       title,
       description,
@@ -56,57 +92,162 @@ router.post("/", isLoggedIn, async (req, res) => {
       image,
       owner: req.user._id,
     });
+
     await newListing.save();
-    res.status(201).json({ success: true, data: newListing });
+
+    return res.status(201).json({
+      success: true,
+      data: newListing,
+    });
   } catch (err) {
     if (err.name === "ValidationError") {
-      return res.status(400).json({ success: false, message: err.message });
+      return res.status(400).json({
+        success: false,
+        message: err.message,
+      });
     }
-    console.error("❌ Error creating listing:", err.message);
-    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
+
+    if (err.name === "CastError") {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid value for "${err.path || "field"}".`,
+      });
+    }
+
+    console.error("Error creating listing:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred. Please try again.",
+    });
   }
 });
 
-// PUT update listing (protected: listing owner only)
+// PUT update listing (authenticated owner only)
 router.put("/:id", isLoggedIn, isOwner, async (req, res) => {
   try {
-    const { title, description, price, location, country, image } = req.body;
+    const {
+      title,
+      description,
+      price,
+      location,
+      country,
+      image,
+    } = req.body;
+
     const updateData = {};
+
     if (title !== undefined) updateData.title = title;
-    if (description !== undefined) updateData.description = description;
-    if (price !== undefined) updateData.price = price;
+    if (description !== undefined) {
+      updateData.description = description;
+    }
+
+    if (price !== undefined) {
+      if (
+        price === null ||
+        (typeof price === "string" && price.trim() === "")
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid value for "price".',
+        });
+      }
+
+      const numPrice = Number(price);
+
+      if (!Number.isFinite(numPrice)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid value for "price". Expected a number.',
+        });
+      }
+
+      updateData.price = numPrice;
+    }
+
     if (location !== undefined) updateData.location = location;
     if (country !== undefined) updateData.country = country;
     if (image !== undefined) updateData.image = image;
 
-    // Notice: owner and reviews cannot be modified via update requests
+    // Do not allow clients to change owner or reviews.
     const updatedListing = await Listing.findByIdAndUpdate(
       req.params.id,
       updateData,
-      { new: true, runValidators: true }
+      {
+        new: true,
+        runValidators: true,
+      }
     );
-    res.json({ success: true, data: updatedListing });
-  } catch (err) {
-    if (err.name === "ValidationError" || err.name === "CastError") {
-      return res.status(400).json({ success: false, message: "Invalid input. Please check your data and try again." });
+
+    if (!updatedListing) {
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found.",
+      });
     }
-    console.error("❌ Error updating listing:", err.message);
-    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
+
+    return res.json({
+      success: true,
+      data: updatedListing,
+    });
+  } catch (err) {
+    if (err.name === "ValidationError") {
+      // Mongoose provides field-specific validation details.
+      return res.status(400).json({
+        success: false,
+        message: err.message,
+      });
+    }
+
+    if (err.name === "CastError") {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid value for "${err.path || "field"}".`,
+      });
+    }
+
+    console.error("Error updating listing:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred. Please try again.",
+    });
   }
 });
 
-// DELETE listing (protected: listing owner only)
+// DELETE listing (authenticated owner only)
 router.delete("/:id", isLoggedIn, isOwner, async (req, res) => {
   try {
-    const listing = req.listing || (await Listing.findById(req.params.id));
-    if (listing && listing.reviews && listing.reviews.length > 0) {
-      await Review.deleteMany({ _id: { $in: listing.reviews } });
+    const listing =
+      req.listing || (await Listing.findById(req.params.id));
+
+    if (!listing) {
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found.",
+      });
     }
+
+    // Delete associated reviews before deleting the listing.
+    if (listing.reviews && listing.reviews.length > 0) {
+      await Review.deleteMany({
+        _id: { $in: listing.reviews },
+      });
+    }
+
     await Listing.findByIdAndDelete(req.params.id);
-    res.json({ success: true, message: "Listing deleted" });
+
+    return res.json({
+      success: true,
+      message: "Listing deleted successfully.",
+    });
   } catch (err) {
-    console.error("❌ Error deleting listing:", err.message);
-    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
+    console.error("Error deleting listing:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "An unexpected error occurred. Please try again.",
+    });
   }
 });
 

@@ -726,43 +726,72 @@ async function runAllTests() {
     assert.strictEqual(res.status, 404);
   });
 
+
   // 9. PUT Listing Price Validation (CastError vs DB Failure)
   console.log("\n9. PUT Listing Price Validation");
-  await test("PUT /api/listings/:id with non-numeric price returns 400", async () => {
-    // Stub findByIdAndUpdate to throw a CastError like Mongoose does for bad price
-    const origUpdate = Listing.findByIdAndUpdate;
-    Listing.findByIdAndUpdate = function () {
-      const err = new Error('Cast to Number failed for value "abc" at path "price"');
-      err.name = "CastError";
-      return Promise.reject(err);
-    };
-    const res = await request(`/api/listings/${listing1Id}`, {
-      method: "PUT",
-      headers: { "x-test-role": "owner" },
-      body: { price: "abc" },
-    });
-    Listing.findByIdAndUpdate = origUpdate;
-    assert.strictEqual(res.status, 400);
-    assert.strictEqual(res.data.success, false);
-    // Must not contain raw internal error details
-    assert.strictEqual(res.data.message.includes("CastError"), false);
-  });
 
-  await test("PUT /api/listings/:id with genuine DB failure returns 500", async () => {
-    const origUpdate = Listing.findByIdAndUpdate;
-    Listing.findByIdAndUpdate = function () {
-      return Promise.reject(new Error("Simulated disk I/O failure"));
-    };
-    const res = await request(`/api/listings/${listing1Id}`, {
-      method: "PUT",
-      headers: { "x-test-role": "owner" },
-      body: { title: "Valid title" },
-    });
-    Listing.findByIdAndUpdate = origUpdate;
-    assert.strictEqual(res.status, 500);
-    assert.strictEqual(res.data.success, false);
-    assert.strictEqual(res.data.message.includes("Simulated"), false);
-  });
+  // Test 1: Invalid price returns HTTP 400
+  await test(
+    "PUT /api/listings/:id with non-numeric price returns 400",
+    async () => {
+      const res = await request(`/api/listings/${listing1Id}`, {
+        method: "PUT",
+        headers: { "x-test-role": "owner" },
+        body: { price: "abc" },
+      });
+
+      assert.strictEqual(res.status, 400);
+      assert.strictEqual(res.data.success, false);
+      assert.ok(
+        res.data.message.toLowerCase().includes("price"),
+        "Error message should mention the price field"
+      );
+
+      // Listing price must remain unchanged.
+      assert.strictEqual(
+        dbState.listings.get(listing1Id.toString()).price,
+        2500
+      );
+    }
+  );
+
+  // Test 2: Actual Mongoose casting rejects non-numeric price
+
+  await test(
+    "PUT /api/listings/:id with genuine DB failure returns 500",
+    async () => {
+      const originalUpdate = Listing.findByIdAndUpdate;
+      const originalConsoleError = console.error;
+
+      try {
+        Listing.findByIdAndUpdate = function () {
+          return Promise.reject(
+            new Error("Simulated disk I/O failure")
+          );
+        };
+
+        // Suppress only the expected error log in this test.
+        console.error = () => { };
+
+        const res = await request(`/api/listings/${listing1Id}`, {
+          method: "PUT",
+          headers: { "x-test-role": "owner" },
+          body: { title: "Valid title" },
+        });
+
+        assert.strictEqual(res.status, 500);
+        assert.strictEqual(res.data.success, false);
+        assert.strictEqual(
+          res.data.message.includes("Simulated"),
+          false
+        );
+      } finally {
+        Listing.findByIdAndUpdate = originalUpdate;
+        console.error = originalConsoleError;
+      }
+    }
+  );
+
 
   // Teardown
   await new Promise((resolve) => server.close(resolve));
