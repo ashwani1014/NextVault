@@ -3,7 +3,7 @@ const cors = require("cors");
 const session = require("express-session");
 const passport = require("passport");
 const LocalStrategy = require("passport-local");
-const connectDB = require("./config/db.js");
+const { connectDB, disconnectDB } = require("./config/db.js");
 const User = require("./models/user.js");
 
 // Route imports
@@ -14,8 +14,11 @@ const userRoutes = require("./routes/user.js");
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// ─── Connect to Database ───
-connectDB();
+// ─── Environment Variable Validation ───
+if (!process.env.SESSION_SECRET) {
+  console.error("❌ Error: SESSION_SECRET environment variable is required");
+  process.exit(1);
+}
 
 // ─── Middleware ───
 app.use(
@@ -29,7 +32,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // ─── Session Config ───
 const sessionOptions = {
-  secret: process.env.SESSION_SECRET || "mysupersecretcode",
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: true,
   cookie: {
@@ -56,7 +59,68 @@ app.use("/api/listings", listingRoutes);
 app.use("/api/listings/:id/reviews", reviewRoutes);
 app.use("/api/auth", userRoutes);
 
-// ─── Start Server ───
-app.listen(PORT, () => {
-  console.log(`🚀 Backend server running on http://localhost:${PORT}`);
-});
+// ─── Graceful Shutdown ───
+let server;
+
+const gracefulShutdown = async (signal) => {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+
+  // Stop accepting new connections
+  if (server) {
+    server.close(async (err) => {
+      if (err) {
+        console.error("❌ Error closing HTTP server:", err.message);
+        process.exit(1);
+      }
+
+      console.log("✅ HTTP server closed");
+
+      // Close database connection
+      await disconnectDB();
+
+      console.log("✅ Graceful shutdown complete");
+      process.exit(0);
+    });
+
+    // Force shutdown after 10 seconds if graceful shutdown fails
+    setTimeout(() => {
+      console.error("❌ Forced shutdown after timeout");
+      process.exit(1);
+    }, 10000);
+  } else {
+    await disconnectDB();
+    process.exit(0);
+  }
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// ─── Connect to Database and Start Server ───
+async function startServer() {
+  try {
+    // Connect to MongoDB first
+    await connectDB();
+
+    // Start HTTP server only after DB connection succeeds
+    server = app.listen(PORT, () => {
+      console.log(`🚀 Backend server running on http://localhost:${PORT}`);
+    });
+
+    // Handle server errors
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use`);
+      } else {
+        console.error("❌ Server error:", err.message);
+      }
+      process.exit(1);
+    });
+
+  } catch (err) {
+    console.error("❌ Failed to start server:", err.message);
+    process.exit(1);
+  }
+}
+
+startServer();
