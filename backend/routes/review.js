@@ -33,15 +33,16 @@ router.post("/", isLoggedIn, async (req, res) => {
       listing.reviews.push(createdReview._id);
       await listing.save();
     } catch (listingErr) {
+      console.error("❌ Failed to save listing with new review:", listingErr.message);
       // Rollback: delete the created review if saving the listing fails to prevent orphan reviews
       try {
         await Review.findByIdAndDelete(createdReview._id);
       } catch (cleanupErr) {
-        console.error("Failed to clean up orphan review:", cleanupErr);
+        console.error("❌ Failed to clean up orphan review during rollback:", cleanupErr.message);
       }
       return res.status(500).json({
         success: false,
-        message: "Failed to link review to listing: " + listingErr.message,
+        message: "Failed to create review. Please try again.",
       });
     }
 
@@ -50,7 +51,8 @@ router.post("/", isLoggedIn, async (req, res) => {
     if (err.name === "ValidationError") {
       return res.status(400).json({ success: false, message: err.message });
     }
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Review creation error:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 
@@ -74,7 +76,8 @@ router.get("/", async (req, res) => {
     }
     res.json({ success: true, data: listing.reviews });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Error fetching reviews:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 
@@ -98,7 +101,8 @@ router.put("/:reviewId", isLoggedIn, isReviewAuthor, async (req, res) => {
     if (err.name === "ValidationError") {
       return res.status(400).json({ success: false, message: err.message });
     }
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Error updating review:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 
@@ -112,7 +116,8 @@ router.delete("/:reviewId", isLoggedIn, isReviewAuthor, async (req, res) => {
     await Review.findByIdAndDelete(reviewId);
     res.json({ success: true, message: "Review deleted" });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ Error deleting review:", err.message);
+    res.status(500).json({ success: false, message: "An unexpected error occurred. Please try again." });
   }
 });
 

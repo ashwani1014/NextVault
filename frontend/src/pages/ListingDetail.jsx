@@ -34,17 +34,21 @@ function ListingDetail({ user }) {
     return defaultMsg || "An unexpected error occurred. Please try again.";
   };
 
-  const fetchListing = () => {
-    getListing(id)
-      .then((res) => setListing(res.data.data))
-      .catch((err) => {
-        setActionError(getErrorMessage(err, "Failed to load listing details."));
-      })
-      .finally(() => setLoading(false));
+  const fetchListing = async () => {
+    try {
+      const res = await getListing(id);
+      setListing(res.data.data);
+      return res.data.data;
+    } catch (err) {
+      setActionError(getErrorMessage(err, "Failed to load listing details."));
+      throw err;
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    fetchListing();
+    fetchListing().catch(() => {});
   }, [id]);
 
   const handleDelete = async () => {

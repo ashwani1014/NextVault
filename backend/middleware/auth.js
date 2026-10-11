@@ -57,23 +57,18 @@ const isReviewAuthor = async (req, res, next) => {
         return res.status(400).json({ success: false, message: "Invalid listing ID" });
       }
 
-      const listing = await Listing.findById(req.params.id);
-      if (!listing) {
-        return res.status(404).json({ success: false, message: "Listing not found" });
-      }
-
       const review = await Review.findById(reviewId);
       if (!review) {
         return res.status(404).json({ success: false, message: "Review not found" });
       }
 
-      // Ensure the review actually belongs to the specified listing
-      const belongsToListing = listing.reviews && listing.reviews.some((rId) => {
-        const idStr = rId && (rId._id ? rId._id.toString() : rId.toString());
-        return idStr === review._id.toString();
-      });
-
-      if (!belongsToListing) {
+      // Efficient database existence query: verifies review belongs to listing without loading entire listing or scanning in memory
+      const listingHasReview = await Listing.exists({ _id: req.params.id, reviews: reviewId });
+      if (!listingHasReview) {
+        const listingExists = await Listing.exists({ _id: req.params.id });
+        if (!listingExists) {
+          return res.status(404).json({ success: false, message: "Listing not found" });
+        }
         return res.status(404).json({ success: false, message: "Review not found in this listing" });
       }
 
@@ -82,7 +77,6 @@ const isReviewAuthor = async (req, res, next) => {
         return res.status(403).json({ success: false, message: "You do not have permission to perform this action" });
       }
 
-      req.listing = listing;
       req.review = review;
       return next();
     }

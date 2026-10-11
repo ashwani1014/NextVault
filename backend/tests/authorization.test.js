@@ -23,6 +23,7 @@ const origListingFind = Listing.find;
 const origListingFindById = Listing.findById;
 const origListingFindByIdAndUpdate = Listing.findByIdAndUpdate;
 const origListingFindByIdAndDelete = Listing.findByIdAndDelete;
+const origListingExists = Listing.exists;
 const origListingSave = Listing.prototype.save;
 
 const origReviewFind = Review.find;
@@ -254,6 +255,23 @@ function installMongooseStubs() {
     return Promise.resolve(existing || null);
   };
 
+  Listing.exists = function (filter) {
+    if (filter && filter._id && filter.reviews) {
+      const listingIdStr = filter._id.toString();
+      const reviewIdStr = filter.reviews.toString();
+      const listing = dbState.listings.get(listingIdStr);
+      if (!listing) return Promise.resolve(null);
+      const hasReview = listing.reviews && listing.reviews.some((r) => r.toString() === reviewIdStr);
+      return Promise.resolve(hasReview ? { _id: listing._id } : null);
+    }
+    if (filter && filter._id) {
+      const listingIdStr = filter._id.toString();
+      const exists = dbState.listings.has(listingIdStr);
+      return Promise.resolve(exists ? { _id: filter._id } : null);
+    }
+    return Promise.resolve(null);
+  };
+
   Listing.prototype.save = async function () {
     if (!this._id) this._id = new mongoose.Types.ObjectId();
     const idStr = this._id.toString();
@@ -321,6 +339,7 @@ function restoreMongooseMethods() {
   Listing.findById = origListingFindById;
   Listing.findByIdAndUpdate = origListingFindByIdAndUpdate;
   Listing.findByIdAndDelete = origListingFindByIdAndDelete;
+  Listing.exists = origListingExists;
   Listing.prototype.save = origListingSave;
 
   Review.find = origReviewFind;
@@ -562,9 +581,26 @@ async function runAllTests() {
     assert.strictEqual(dbState.listings.get(listing2Id.toString()).reviews.includes(review2Id), true);
   });
 
-  // 6. Database Failure Rollback on Review Creation (Finding 2)
-  console.log("\n6. Database Failure Rollback on Review Creation");
-  await test("Database failure on listing.save() rolls back created review and returns 500", async () => {
+  await test("Listing.exists is used for efficient review-listing association check", async () => {
+    let existsCalled = false;
+    const currentExists = Listing.exists;
+    Listing.exists = function (filter) {
+      existsCalled = true;
+      return currentExists.call(this, filter);
+    };
+    const res = await request(`/api/listings/${listing1Id}/reviews/${review1Id}`, {
+      method: "PUT",
+      headers: { "x-test-role": "author" },
+      body: { comment: "Testing exists query", rating: 5 },
+    });
+    Listing.exists = currentExists;
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(existsCalled, true);
+  });
+
+  // 6. Database Failure Rollback on Review Creation (Finding 2 & 3)
+  console.log("\n6. Database Failure Rollback on Review Creation (Safe Error Responses)");
+  await test("Database failure on listing.save() rolls back created review, returns 500 without leaking raw error", async () => {
     // Stub listing.save to throw a genuine database error
     const origFindById = Listing.findById;
     Listing.findById = function (id) {
@@ -590,7 +626,9 @@ async function runAllTests() {
 
     assert.strictEqual(res.status, 500);
     assert.strictEqual(res.data.success, false);
-    assert.strictEqual(res.data.message.includes("Simulated Disk Full"), true);
+    // Generic, safe error message to client - no internal details leaked
+    assert.strictEqual(res.data.message, "Failed to create review. Please try again.");
+    assert.strictEqual(res.data.message.includes("Simulated Disk Full"), false);
     // Ensure no orphan review was left behind
     assert.strictEqual(dbState.reviews.size, initialReviewCount);
   });
