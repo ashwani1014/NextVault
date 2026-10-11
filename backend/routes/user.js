@@ -24,11 +24,26 @@ const validateUsernameForLogin = (username) => {
 // POST /api/auth/signup
 router.post("/signup", async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    // Handle missing request body (Express 5 can have undefined req.body)
+    const body = req.body || {};
+    const { username, email, password } = body;
 
     // Backend validation
     if (!username || !email || !password) {
       return res.status(400).json({ success: false, message: "All fields are required." });
+    }
+
+    // Validate types before calling string methods
+    if (typeof username !== 'string') {
+      return res.status(400).json({ success: false, message: "Username must be a string." });
+    }
+
+    if (typeof email !== 'string') {
+      return res.status(400).json({ success: false, message: "Email must be a string." });
+    }
+
+    if (typeof password !== 'string') {
+      return res.status(400).json({ success: false, message: "Password must be a string." });
     }
 
     const trimmedUsername = username.trim();
@@ -95,6 +110,11 @@ router.post("/login", (req, res, next) => {
   // Validate username is a string before calling trim
   if (typeof username !== 'string') {
     return res.status(400).json({ success: false, message: "Username must be a string." });
+  }
+
+  // Validate password is a string
+  if (typeof password !== 'string') {
+    return res.status(400).json({ success: false, message: "Password must be a string." });
   }
 
   if (!username.trim()) {
