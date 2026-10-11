@@ -1,22 +1,22 @@
 const mongoose = require("mongoose");
 
 // Read MongoDB URL from environment variable
-const NODE_ENV = process.env.NODE_ENV || "development";
+const NODE_ENV = process.env.NODE_ENV;
 const MONGO_URL = process.env.MONGO_URL;
 
-// For local development, allow a safe default URI
-// For production, require MONGO_URL to be set
-if (!MONGO_URL) {
-  if (NODE_ENV === "production") {
-    console.error("❌ Error: MONGO_URL environment variable is required in production");
-    process.exit(1);
-  } else {
+// For local development only, allow a safe default URI when NODE_ENV is explicitly 'development'
+// If MONGO_URL is missing and NODE_ENV is unset or any non-development value, fail startup clearly
+let MONGO_URI = MONGO_URL;
+
+if (!MONGO_URI) {
+  if (NODE_ENV === "development") {
     console.warn("⚠️  Warning: Using default MongoDB URL for development. Set MONGO_URL in .env to override.");
+    MONGO_URI = "mongodb://127.0.0.1:27017/Renthouse";
+  } else {
+    console.error("❌ Error: MONGO_URL environment variable is required (NODE_ENV must be explicitly 'development' to use development fallback)");
+    process.exit(1);
   }
 }
-
-// Use provided MONGO_URL or default for development
-const MONGO_URI = MONGO_URL || "mongodb://127.0.0.1:27017/Renthouse";
 
 async function connectDB() {
   try {

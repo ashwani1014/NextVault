@@ -16,19 +16,16 @@ const userRoutes = require("./routes/user.js");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const NODE_ENV = process.env.NODE_ENV || "development";
+const NODE_ENV = process.env.NODE_ENV;
 
 // ─── Environment Variable Validation ───
-if (NODE_ENV === "production") {
-  if (!process.env.SESSION_SECRET) {
-    console.error("❌ Error: SESSION_SECRET environment variable is required in production");
-    process.exit(1);
-  }
-} else {
-  // For local development, use a default if not set
-  if (!process.env.SESSION_SECRET) {
+if (!process.env.SESSION_SECRET) {
+  if (NODE_ENV === "development") {
     console.warn("⚠️  Warning: Using default SESSION_SECRET for development. Set SESSION_SECRET in .env for security.");
     process.env.SESSION_SECRET = "dev-secret-key-change-in-production";
+  } else {
+    console.error("❌ Error: SESSION_SECRET environment variable is required (NODE_ENV must be explicitly 'development' to use development fallback)");
+    process.exit(1);
   }
 }
 
